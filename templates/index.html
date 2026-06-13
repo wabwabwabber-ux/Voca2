@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Voca</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="phone-shell">
+    <header class="topbar">
+      <button class="top-icon menu-icon" id="keyboardButton" type="button" aria-label="Open text input"></button>
+      <h1>Voca</h1>
+      <button class="top-icon gear-icon" id="clearButton" type="button" aria-label="Clear current response"></button>
+    </header>
+
+    <main class="main-view" id="mainView">
+      <section class="translate-page" id="translatePage" aria-label="Voca translator">
+        <div class="bridge-pill">
+          <select id="languageSelect" aria-label="Choose language">
+            {% for key, language in languages.items() %}
+              <option value="{{ key }}">{{ language.flag }} {{ language.label }}  ↔  English</option>
+            {% endfor %}
+          </select>
+        </div>
+        <p class="bridge-copy" id="bridgeCopy">You speak Amharic. Voca replies in Amharic.</p>
+
+        <section class="text-drawer" id="textDrawer" aria-hidden="true">
+          <textarea id="transcriptInput" maxlength="4000" placeholder="Type instead..."></textarea>
+          <button id="sendButton" class="send-button" type="button" aria-label="Send typed text"></button>
+        </section>
+
+        <section class="response-card" id="responseCard" aria-live="polite">
+          <div class="response-head">
+            <span>Voca said:</span>
+            <button class="speaker-button" id="speakerButton" type="button" aria-label="Replay response"></button>
+          </div>
+          <div class="reply-text" id="replyText">እንኳን ደህና መጣህ!</div>
+          <div class="reply-subtext" id="replySubtext">Tap the mic and speak in your selected language.</div>
+        </section>
+
+        <section class="mic-section">
+          <button class="mic-button" id="micButton" type="button" aria-label="Tap to speak" aria-pressed="false">
+            <span class="mic-glow"></span>
+            <span class="mic-icon" aria-hidden="true"></span>
+          </button>
+          <p id="micHint">Tap to speak</p>
+        </section>
+      </section>
+
+      <section class="history-page" id="historyPage" aria-label="History">
+        <div class="history-list" id="historyList">
+          <div class="empty-history">No saved translations yet.</div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Main navigation">
+      <button class="nav-item is-active" data-view="translate" type="button">
+        <span class="nav-icon language-icon"></span>
+        <span>Language</span>
+      </button>
+      <button class="nav-item" data-view="history" type="button">
+        <span class="nav-icon history-icon"></span>
+        <span>History</span>
+      </button>
+    </nav>
+  </div>
+
+  <script>
+    const languageData = {
+      {% for key, language in languages.items() %}
+        "{{ key }}": {
+          label: "{{ language.label }}",
+          flag: "{{ language.flag }}",
+          speech: "{{ language.speech }}"
+        }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    };
+
+    const languageSelect = document.getElementById("languageSelect");
+    const bridgeCopy = document.getElementById("bridgeCopy");
+    const keyboardButton = document.getElementById("keyboardButton");
+    const clearButton = document.getElementById("clearButton");
+    const textDrawer = document.getElementById("textDrawer");
+    const transcriptInput = document.getElementById("transcriptInput");
+    const sendButton = document.getElementById("sendButton");
+    const responseCard = document.getElementById("responseCard");
+    const replyText = document.getElementById("replyText");
+    const replySubtext = document.getElementById("replySubtext");
+    const speakerButton = document.getElementById("speakerButton");
+    const micButton = document.getElementById("micButton");
+    const micHint = document.getElementById("micHint");
+    const mainView = document.getElementById("mainView");
+    const historyList = document.getElementById("historyList");
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const state = {
+      recognition: null,
+      listening: false,
+      drawerOpen: false,
+      latestResponse: "እንኳን ደህና መጣህ!",
+      latestEnglish: "Tap the mic and speak in your selected language.",
+      history: [],
+      typingTimer: null,
+    };
+
+    function selectedLanguage() {
+      return languageData[languageSelect.value] || languageData.amharic;
+    }
+
+    function vibrate() {
+      if (navigator.vibrate) {
+        navigator.vibrate(10);
+      }
+    }
+
+    function setListening(active) {
+      state.listening = active;
+      document.body.classList.toggle("is-listening", active);
+      micButton.classList.toggle("is-active", active);
+      micButton.setAttribute("aria-pressed", String(active));
+      micHint.textContent = active ? "Listening..." : "Tap to speak";
+    }
+
+    function updateBridgeCopy() {
+      const language = selectedLanguage();
+      bridgeCopy.textContent = `You speak ${language.label}. Voca replies in ${language.label}.`;
+      if (state.recognition) {
+        state.recognition.lang = language.speech;
+      }
+    }
+
+    function typeInto(element, text, speed = 18) {
+      window.clearInterval(state.typingTimer);
+      element.textContent = "";
+      let index = 0;
+      state.typingTimer = window.setInterval(() => {
+        element.textContent += text.charAt(index);
+        index += 1;
+        if (index >= text.length) {
+          window.clearInterval(state.typingTimer);
+          state.typingTimer = null;
+        }
+      }, speed);
+    }
+
+    function setLoading(active, preserveMessage = false) {
+      responseCard.classList.toggle("is-loading", active);
+      micButton.disabled = active;
+      sendButton.disabled = active;
+      if (active) {
+        responseCard.classList.remove("is-error");
+        replySubtext.textContent = "Translating, thinking, translating back...";
+      } else if (!preserveMessage) {
+        replySubtext.textContent = state.latestEnglish;
+      }
+    }
+
+    function saveHistory(data) {
+      state.history = [
+        {
+          flag: data.flag,
+          language: data.language,
+          text: data.translated_response,
+          english: data.english_response,
+        },
+        ...state.history,
+      ].slice(0, 10);
+      renderHistory();
+    }
+
+    function renderHistory() {
+      if (!state.history.length) {
+        historyList.innerHTML = `<div class="empty-history">No saved translations yet.</div>`;
+        return;
+      }
+
+      historyList.innerHTML = state.history.map((item, index) => `
+        <article class="history-card">
+          <div class="history-flag">${item.flag}</div>
+          <div>
+            <strong>${item.language}</strong>
+            <p>${item.english}</p>
+          </div>
+          <button class="replay-button" data-index="${index}" type="button">Replay</button>
+        </article>
+      `).join("");
+    }
+
+    function speak(text = state.latestResponse) {
+      if (!("speechSynthesis" in window) || !text.trim()) {
+        return;
+      }
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = selectedLanguage().speech;
+      utterance.rate = 0.95;
+      window.speechSynthesis.speak(utterance);
+    }
+
+    async function submitMessage(message) {
+      const cleanMessage = message.trim();
+      if (!cleanMessage) {
+        replyText.textContent = "Say something first.";
+        replySubtext.textContent = "Use the mic or open text input from the top-left icon.";
+        return;
+      }
+
+      let failed = false;
+      setLoading(true);
+      typeInto(replyText, "...");
+
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: cleanMessage,
+            language: languageSelect.value,
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error([data.error, data.stage, data.detail].filter(Boolean).join(" | "));
+        }
+
+        responseCard.classList.remove("is-error");
+        state.latestResponse = data.translated_response;
+        state.latestEnglish = data.english_response;
+        typeInto(replyText, data.translated_response);
+        replySubtext.textContent = data.english_response;
+        transcriptInput.value = "";
+        saveHistory(data);
+        speak(data.translated_response);
+      } catch (error) {
+        failed = true;
+        responseCard.classList.add("is-error");
+        replyText.textContent = "Translation failed.";
+        replySubtext.textContent = error.message || "Check the Flask terminal for details.";
+      } finally {
+        setLoading(false, failed);
+      }
+    }
+
+    function setupSpeechRecognition() {
+      if (!SpeechRecognition) {
+        replySubtext.textContent = "Speech recognition is unavailable. Use the top-left text input.";
+        return;
+      }
+
+      state.recognition = new SpeechRecognition();
+      state.recognition.continuous = false;
+      state.recognition.interimResults = true;
+      state.recognition.maxAlternatives = 1;
+      state.recognition.lang = selectedLanguage().speech;
+
+      state.recognition.onstart = () => setListening(true);
+      state.recognition.onend = () => setListening(false);
+      state.recognition.onerror = (event) => {
+        replyText.textContent = "Speech error.";
+        replySubtext.textContent = event.error;
+      };
+
+      state.recognition.onresult = (event) => {
+        let finalText = "";
+        let interimText = "";
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const transcript = event.results[index][0].transcript;
+          if (event.results[index].isFinal) {
+            finalText += transcript;
+          } else {
+            interimText += transcript;
+          }
+        }
+
+        transcriptInput.value = (finalText || interimText).trim();
+        if (finalText.trim()) {
+          submitMessage(finalText);
+        }
+      };
+    }
+
+    keyboardButton.addEventListener("click", () => {
+      vibrate();
+      state.drawerOpen = !state.drawerOpen;
+      textDrawer.classList.toggle("is-open", state.drawerOpen);
+      textDrawer.setAttribute("aria-hidden", String(!state.drawerOpen));
+      if (state.drawerOpen) {
+        transcriptInput.focus();
+      }
+    });
+
+    clearButton.addEventListener("click", () => {
+      vibrate();
+      transcriptInput.value = "";
+      state.latestResponse = "";
+      state.latestEnglish = "";
+      responseCard.classList.remove("is-error");
+      replyText.textContent = "Ready when you are.";
+      replySubtext.textContent = "Tap the mic and speak in your selected language.";
+    });
+
+    sendButton.addEventListener("click", () => {
+      vibrate();
+      submitMessage(transcriptInput.value);
+    });
+
+    transcriptInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        submitMessage(transcriptInput.value);
+      }
+    });
+
+    micButton.addEventListener("click", () => {
+      vibrate();
+      if (!state.recognition) {
+        state.drawerOpen = true;
+        textDrawer.classList.add("is-open");
+        transcriptInput.focus();
+        return;
+      }
+      if (state.listening) {
+        state.recognition.stop();
+      } else {
+        state.recognition.lang = selectedLanguage().speech;
+        state.recognition.start();
+      }
+    });
+
+    speakerButton.addEventListener("click", () => {
+      vibrate();
+      speak();
+    });
+
+    languageSelect.addEventListener("change", updateBridgeCopy);
+
+    document.querySelectorAll(".nav-item").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".nav-item").forEach((item) => item.classList.remove("is-active"));
+        button.classList.add("is-active");
+        mainView.dataset.view = button.dataset.view;
+      });
+    });
+
+    historyList.addEventListener("click", (event) => {
+      const replay = event.target.closest(".replay-button");
+      if (!replay) {
+        return;
+      }
+      const item = state.history[Number(replay.dataset.index)];
+      if (!item) {
+        return;
+      }
+      mainView.dataset.view = "translate";
+      document.querySelectorAll(".nav-item").forEach((navItem) => {
+        navItem.classList.toggle("is-active", navItem.dataset.view === "translate");
+      });
+      state.latestResponse = item.text;
+      state.latestEnglish = item.english;
+      replyText.textContent = item.text;
+      replySubtext.textContent = item.english;
+      speak(item.text);
+    });
+
+    setupSpeechRecognition();
+    updateBridgeCopy();
+    renderHistory();
+  </script>
+</body>
+</html>
