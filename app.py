@@ -10,7 +10,7 @@ from deep_translator import GoogleTranslator
 from flask import Flask, jsonify, render_template, request
 
 
-API_KEY = "AIzaSyCbASd6VhE_C1_oobdRLtTH8LVxaZUBWqg"
+API_KEY = GEMINI_API_KEY
 
 app = Flask(__name__)
 
