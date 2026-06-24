@@ -1,6 +1,7 @@
 import logging
 import socket
 import warnings
+import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 warnings.simplefilter("ignore", FutureWarning)
@@ -10,7 +11,8 @@ from deep_translator import GoogleTranslator
 from flask import Flask, jsonify, render_template, request
 
 
-API_KEY = GEMINI_API_KEY
+
+API_KEY = os.environ.get("GEMINI_API_KEY")
 
 app = Flask(__name__)
 
